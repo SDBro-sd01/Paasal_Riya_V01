@@ -1,0 +1,283 @@
+CREATE DATABASE PAASAL_RIYA_DB_01;
+USE PAASAL_RIYA_DB_01;
+
+CREATE TABLE users (
+    user_id INT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(50) NOT NULL UNIQUE,
+    fullname VARCHAR(100) NOT NULL,
+    mobile VARCHAR(15) NOT NULL,
+    email VARCHAR(100) NOT NULL UNIQUE,
+    nic VARCHAR(20) NOT NULL UNIQUE,
+    district VARCHAR(100) NOT NULL,
+    province VARCHAR(100) NOT NULL,
+    address TEXT NOT NULL,
+    user_type VARCHAR(50) NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+select * from users;
+
+DESCRIBE users;
+
+ALTER TABLE users 
+MODIFY username VARCHAR(50) COLLATE utf8mb4_bin,
+MODIFY email VARCHAR(100) COLLATE utf8mb4_bin,
+MODIFY mobile VARCHAR(15) COLLATE utf8mb4_bin,
+MODIFY nic VARCHAR(20) COLLATE utf8mb4_bin;
+
+
+CREATE TABLE posts (
+    post_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    reg_no VARCHAR(50) NOT NULL,
+    province VARCHAR(100) NOT NULL,
+    district VARCHAR(100) NOT NULL,
+    address TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+);
+
+
+
+
+-- ප්‍රධාන සේවා වගුව
+CREATE TABLE services (
+    service_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    service_name VARCHAR(255) NOT NULL,
+    reg_no VARCHAR(50) NOT NULL UNIQUE,
+    vehicle_type ENUM('Bus', 'Van', 'Three-wheeler') NOT NULL,
+    owner VARCHAR(100) NOT NULL,
+    driver VARCHAR(100) NOT NULL,
+    driver_reg_no VARCHAR(50) NOT NULL,
+    province VARCHAR(100) NOT NULL,
+    district VARCHAR(100) NOT NULL,
+    address TEXT NOT NULL,
+    description TEXT,
+    -- Schedule
+    has_morning BOOLEAN DEFAULT FALSE,
+    morning_place VARCHAR(255),
+    morning_time TIME,
+    has_evening BOOLEAN DEFAULT FALSE,
+    evening_place VARCHAR(255),
+    evening_time TIME,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+);
+
+-- Existing services table එකට නව columns එකතු කිරීම
+ALTER TABLE services 
+ADD COLUMN service_type ENUM('School Transport', 'Private Institute Transport') NOT NULL AFTER vehicle_type,
+ADD COLUMN home_town VARCHAR(100) NOT NULL AFTER district,
+ADD COLUMN areas_covered TEXT NOT NULL AFTER home_town,
+ADD COLUMN road_description TEXT NULL AFTER description;
+
+ALTER TABLE services 
+ADD COLUMN status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending';
+
+
+
+-- Assistants (Multiple)
+CREATE TABLE service_assistants (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    service_id INT NOT NULL,
+    assistant_name VARCHAR(100) NOT NULL,
+    FOREIGN KEY (service_id) REFERENCES services(service_id) ON DELETE CASCADE
+);
+
+-- Schools (Multiple)
+CREATE TABLE service_schools (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    service_id INT NOT NULL,
+    school_name VARCHAR(255) NOT NULL,
+    FOREIGN KEY (service_id) REFERENCES services(service_id) ON DELETE CASCADE
+);
+
+-- Telephone Numbers (Multiple)
+CREATE TABLE service_telephones (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    service_id INT NOT NULL,
+    telephone VARCHAR(20) NOT NULL,
+    FOREIGN KEY (service_id) REFERENCES services(service_id) ON DELETE CASCADE
+);
+
+-- Emails (Multiple)
+CREATE TABLE service_emails (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    service_id INT NOT NULL,
+    email VARCHAR(100) NOT NULL,
+    FOREIGN KEY (service_id) REFERENCES services(service_id) ON DELETE CASCADE
+);
+
+-- Websites (Multiple)
+CREATE TABLE service_websites (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    service_id INT NOT NULL,
+    website VARCHAR(255) NOT NULL,
+    FOREIGN KEY (service_id) REFERENCES services(service_id) ON DELETE CASCADE
+);
+
+-- Favorites table (user_id, service_id) composite primary key
+CREATE TABLE favorites (
+    user_id INT NOT NULL,
+    service_id INT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, service_id),
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    FOREIGN KEY (service_id) REFERENCES services(service_id) ON DELETE CASCADE
+);
+
+CREATE TABLE ratings (
+    rating_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    service_id INT NOT NULL,
+    rating TINYINT NOT NULL CHECK (rating BETWEEN 1 AND 5),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY unique_user_service (user_id, service_id),
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    FOREIGN KEY (service_id) REFERENCES services(service_id) ON DELETE CASCADE
+);
+
+CREATE TABLE comments (
+    comment_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    service_id INT NOT NULL,
+    comment TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    FOREIGN KEY (service_id) REFERENCES services(service_id) ON DELETE CASCADE,
+    INDEX idx_service (service_id)
+);
+
+CREATE TABLE service_images (
+    image_id INT AUTO_INCREMENT PRIMARY KEY,
+    service_id INT NOT NULL,
+    image_path VARCHAR(500) NOT NULL,
+    is_mandatory TINYINT NOT NULL COMMENT '1=Front,2=Back,3=Left,4=Right,5=Seats,0=Optional',
+    display_order INT DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (service_id) REFERENCES services(service_id) ON DELETE CASCADE,
+    INDEX idx_service (service_id)
+);
+
+-- Admin / User messaging table එක
+CREATE TABLE post_messages (
+    message_id INT AUTO_INCREMENT PRIMARY KEY,
+    post_id INT NOT NULL,
+    sender_id INT NOT NULL,   -- message එක යවන user
+    receiver_id INT NOT NULL, -- message ලබන user (admin හෝ owner)
+    message TEXT NOT NULL,
+    is_read TINYINT(1) DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (post_id) REFERENCES services(service_id) ON DELETE CASCADE,
+    FOREIGN KEY (sender_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    FOREIGN KEY (receiver_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    INDEX idx_post (post_id)
+);
+
+-- report options table
+CREATE TABLE `report_options` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `option_text` varchar(255) NOT NULL,
+  `sort_order` int(11) NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`)
+);
+
+-- sample data (insert these)
+INSERT INTO `report_options` (`option_text`, `sort_order`) VALUES
+('Spam / Misleading', 1),
+('Inappropriate Content', 2),
+('Fake or Fraudulent Listing', 3),
+('Duplicate Listing', 4),
+('Scam / Harassment', 5),
+('Other', 99);
+
+-- reports table (store submitted reports)
+CREATE TABLE `reports` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `service_id` int(11) NOT NULL,
+  `user_id` int(11) NOT NULL,
+  `selected_options` varchar(500) DEFAULT NULL COMMENT 'JSON array of option ids',
+  `custom_reason` text,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`)
+);
+
+-- New table for schedules
+CREATE TABLE `service_schedules` (
+  `schedule_id` int(11) NOT NULL AUTO_INCREMENT,
+  `service_id` int(11) NOT NULL,
+  `label` varchar(100) DEFAULT NULL,
+  `place` varchar(255) NOT NULL,
+  `time` time NOT NULL,
+  `sort_order` int(11) NOT NULL DEFAULT 0,
+  PRIMARY KEY (`schedule_id`),
+  KEY `service_id` (`service_id`),
+  CONSTRAINT `service_schedules_ibfk_1` FOREIGN KEY (`service_id`) REFERENCES `services` (`service_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Required documents list
+CREATE TABLE `req_documents` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `document_name` varchar(255) NOT NULL,
+  `sort_order` int(11) NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Sample data for required documents
+INSERT INTO `req_documents` (`document_name`, `sort_order`) VALUES
+('Vehicle Registration Certificate', 1),
+('Insurance Certificate', 2),
+('Revenue Licence', 3),
+('Driver Driving Licence', 4);
+
+-- Document images uploaded by users per service
+CREATE TABLE `service_document_images` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `service_id` int(11) NOT NULL,
+  `document_type_id` int(11) NOT NULL,
+  `image_path` varchar(500) NOT NULL,
+  `uploaded_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `service_id` (`service_id`),
+  KEY `document_type_id` (`document_type_id`),
+  CONSTRAINT `service_document_images_ibfk_1` FOREIGN KEY (`service_id`) REFERENCES `services` (`service_id`) ON DELETE CASCADE,
+  CONSTRAINT `service_document_images_ibfk_2` FOREIGN KEY (`document_type_id`) REFERENCES `req_documents` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Allow document_type_id to be NULL (we no longer tie images to specific documents)
+ALTER TABLE `service_document_images` 
+  MODIFY `document_type_id` INT NULL DEFAULT NULL,
+  DROP FOREIGN KEY `service_document_images_ibfk_2`;
+-- (The foreign key is dropped because we will set it to NULL. If you want to keep the FK, add a generic "General" row to req_documents with id 0 – but NULL is cleaner.)
+
+CREATE TABLE user_created_method (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    method VARCHAR(50) NOT NULL DEFAULT 'Normal',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE audit_log (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    table_name VARCHAR(50) NOT NULL COMMENT 'වෙනස් වූ table එකේ නම',
+    record_id INT NOT NULL COMMENT 'බලපෑමට ලක්වූ record එකේ ID',
+    action ENUM('INSERT','UPDATE','DELETE') NOT NULL COMMENT 'සිදුකළ ක්‍රියාව',
+    old_values JSON NULL COMMENT 'පැරණි දත්ත (JSON format)',
+    new_values JSON NULL COMMENT 'නව දත්ත (JSON format)',
+    changed_by INT NULL COMMENT 'ක්‍රියාව සිදුකළ user ID (NULL = system/public)',
+    changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT 'වෙනස් වූ වේලාව',
+    ip_address VARCHAR(45) NULL COMMENT 'IP ලිපිනය'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Performance සඳහා indexes
+CREATE INDEX idx_audit_table_record ON audit_log(table_name, record_id);
+CREATE INDEX idx_audit_changed_by ON audit_log(changed_by);
+CREATE INDEX idx_audit_changed_at ON audit_log(changed_at);

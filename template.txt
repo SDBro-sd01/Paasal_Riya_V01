@@ -1,0 +1,13 @@
+<?php
+include "includes/db_connection.php";
+
+$Page_Name = "Dashboard";
+
+$cookie_data = [];
+if (isset($_COOKIE['abc'])) {
+    $cookie_data = json_decode($_COOKIE['abc'], true);
+}
+$isLogged = isset($cookie_data['islogged']) && $cookie_data['islogged'] == 1;
+?>
+
+<?php include "side_bar.php"; ?>

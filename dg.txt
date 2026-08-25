@@ -1,0 +1,969 @@
+මෙන්න මේකට සුපිරි audit part එකක් add කරලා දෙන්න. 
+
+දැනට log වෙලා ඉන්න userගේ id එක මේකෙන් ගන්න.
+
+$cookie_data = [];
+if (isset($_COOKIE['abc'])) {
+    $cookie_data = json_decode($_COOKIE['abc'], true);
+}
+$user_id = isset($cookie_data['user_id']) ? intval($cookie_data['user_id']) : 0;
+
+CREATE TABLE users (
+    user_id INT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(50) NOT NULL UNIQUE,
+    fullname VARCHAR(100) NOT NULL,
+    mobile VARCHAR(15) NOT NULL,
+    email VARCHAR(100) NOT NULL UNIQUE,
+    nic VARCHAR(20) NOT NULL UNIQUE,
+    district VARCHAR(100) NOT NULL,
+    province VARCHAR(100) NOT NULL,
+    address TEXT NOT NULL,
+    user_type VARCHAR(50) NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+
+
+1. Includes\sign_up_inc.php
+
+<?php
+session_start();
+
+include "db_connection.php";
+
+if(isset($_POST["btn-signup"])){
+
+    // Retrieve all fields
+    $username = trim($_POST["username"]);
+    $fullname = trim($_POST["fullname"]);
+    $mobile = trim($_POST["mobile"]);
+    $email = trim($_POST["email"]);
+    $nic = trim($_POST["nic"]);
+    $district = trim($_POST['district']);
+    $province = trim($_POST['province']);
+    $address = trim($_POST['address']);
+    $user_type = trim($_POST["user_type"]);
+    $password = $_POST["password"];
+    $confirmPassword = $_POST["confirmPassword"];
+
+    // Store old input (except passwords) in session
+    $_SESSION['old_input'] = [
+        'username'   => $username,
+        'fullname'   => $fullname,
+        'mobile'     => $mobile,
+        'email'      => $email,
+        'nic'        => $nic,
+        'district'   => $district,
+        'province'   => $province,
+        'address'    => $address,
+        'user_type'  => $user_type
+    ];
+
+    $errors = []; // Field-specific errors
+
+    // 1️⃣ Check empty fields
+    $required_fields = [
+        'username'   => 'Username',
+        'fullname'   => 'Full name',
+        'mobile'     => 'Mobile number',
+        'email'      => 'Email address',
+        'nic'        => 'NIC',
+        'district'   => 'District',
+        'province'   => 'Province',
+        'address'    => 'Address',
+        'user_type'  => 'User type',
+        'password'   => 'Password',
+        'confirmPassword' => 'Confirm password'
+    ];
+
+    foreach ($required_fields as $field => $label) {
+        // For password fields, check the direct $_POST because they are not in old_input
+        if ($field == 'password' || $field == 'confirmPassword') {
+            if (empty($_POST[$field])) {
+                $errors[$field] = "$label is required.";
+            }
+        } else {
+            if (empty(${$field}) && ${$field} !== '0') {
+                $errors[$field] = "$label is required.";
+            }
+        }
+    }
+
+    // If any required field is empty, set errors and redirect (no generic caution)
+    if (!empty($errors)) {
+        $_SESSION['form_errors'] = $errors;
+        header("Location: ../sign_up.php");
+        exit();
+    }
+
+    // 2️⃣ Validate email
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $errors['email'] = "Invalid email format.";
+    }
+
+    // 3️⃣ Check password match
+    if ($password !== $confirmPassword) {
+        $errors['confirmPassword'] = "Passwords do not match.";
+    }
+
+    // 4️⃣ If no basic validation errors, proceed with database checks
+    if (empty($errors)) {
+        // Hash password
+        $hashedPassword = password_hash($password, PASSWORD_BCRYPT);
+
+        // Check if email, username or NIC already exists - individually
+        $dupErrors = [];
+
+        // Check email
+        $stmtEmail = $conn->prepare("SELECT user_id FROM users WHERE email = ?");
+        $stmtEmail->bind_param("s", $email);
+        $stmtEmail->execute();
+        $stmtEmail->store_result();
+        if ($stmtEmail->num_rows > 0) {
+            $dupErrors['email'] = "Email already registered.";
+        }
+        $stmtEmail->close();
+
+        // Check username
+        $stmtUser = $conn->prepare("SELECT user_id FROM users WHERE username = ?");
+        $stmtUser->bind_param("s", $username);
+        $stmtUser->execute();
+        $stmtUser->store_result();
+        if ($stmtUser->num_rows > 0) {
+            $dupErrors['username'] = "Username already taken.";
+        }
+        $stmtUser->close();
+
+        // Check NIC
+        $stmtNic = $conn->prepare("SELECT user_id FROM users WHERE nic = ?");
+        $stmtNic->bind_param("s", $nic);
+        $stmtNic->execute();
+        $stmtNic->store_result();
+        if ($stmtNic->num_rows > 0) {
+            $dupErrors['nic'] = "NIC already registered.";
+        }
+        $stmtNic->close();
+
+        // If any duplicate found
+        if (!empty($dupErrors)) {
+            $_SESSION['form_errors'] = array_merge($errors, $dupErrors);
+            $_SESSION["add_user_caution"] = "Some fields are already registered.";
+            header("Location: ../sign_up.php");
+            exit();
+        }
+
+        // Insert new user
+        $stmt = $conn->prepare("INSERT INTO users 
+            (username, fullname, mobile, email, nic, district, province, address, user_type, password) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+
+        $stmt->bind_param(
+            "ssssssssss",
+            $username,
+            $fullname,
+            $mobile,
+            $email,
+            $nic,
+            $district,
+            $province,
+            $address,
+            $user_type,
+            $hashedPassword
+        );
+
+        if ($stmt->execute()) {
+            // ✅ User create වුණා. දැන් user_created_method table එකට record එකක් දාමු
+            $newUserId = $conn->insert_id;  // අලුතින් හැදුන user ගේ ID එක
+
+            // method = 'Normal' ලෙස insert කරන්න
+            $methodStmt = $conn->prepare("INSERT INTO user_created_method (user_id, method) VALUES (?, 'Normal')");
+            $methodStmt->bind_param("i", $newUserId);
+            $methodStmt->execute();
+            $methodStmt->close();
+
+            // Clear old input on success
+            unset($_SESSION['old_input']);
+            unset($_SESSION['form_errors']);
+            $_SESSION["add_user_success"] = "Account created successfully!";
+            header("Location: ../sign_up.php");
+            exit();
+        } else {
+            // Database error - general message
+            $_SESSION["add_user_error"] = "Something went wrong. Please try again.";
+            header("Location: ../sign_up.php");
+            exit();
+        }
+        $stmt->close();
+        $conn->close();
+    }
+
+    // If we reach here, there were validation errors (email, password, etc.)
+    $_SESSION['form_errors'] = $errors;
+    header("Location: ../sign_up.php");
+    exit();
+}
+?>
+
+2. Includes\edit_user_user_side_backend.php
+
+<?php
+session_start();
+include "db_connection.php";
+include "sri_lanka_provinces_districts.php";
+
+// --- Cookie Login Check ---
+$cookie_data = [];
+if (isset($_COOKIE['abc'])) {
+    $cookie_data = json_decode($_COOKIE['abc'], true);
+}
+$isLogged = isset($cookie_data['islogged']) && $cookie_data['islogged'] == 1;
+$logged_user_id = isset($cookie_data['user_id']) ? intval($cookie_data['user_id']) : 0;
+
+if (!$isLogged || $logged_user_id === 0) {
+    $_SESSION['error'] = "You are not logged in.";
+    header("Location: ../login.php");
+    exit();
+}
+
+// --- POST request check ---
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    header("Location: ../edit_user_user_side_frontend.php");
+    exit();
+}
+
+// --- Verify user identity ---
+$user_id = isset($_POST['user_id']) ? intval($_POST['user_id']) : 0;
+if ($user_id !== $logged_user_id) {
+    $_SESSION['error'] = "Invalid user identity.";
+    header("Location: ../edit_user_user_side_frontend.php");
+    exit();
+}
+
+// --- Fetch current user_type from database ---
+$stmt = $conn->prepare("SELECT user_type FROM users WHERE user_id = ?");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$stmt->bind_result($current_user_type);
+$stmt->fetch();
+$stmt->close();
+
+// --- Input sanitization ---
+$username   = trim($_POST['username']);
+$fullname   = trim($_POST['fullname']);
+$mobile     = trim($_POST['mobile']);
+$email      = trim($_POST['email']);
+$nic        = trim($_POST['nic']);
+$province   = trim($_POST['province']);
+$district   = trim($_POST['district']);
+$address    = trim($_POST['address']);
+$user_type  = trim($_POST['user_type']);
+
+$errors = [];
+
+// --- Basic validations ---
+if (empty($username))   $errors[] = "Username is required.";
+if (empty($fullname))   $errors[] = "Full name is required.";
+if (empty($mobile))     $errors[] = "Mobile number is required.";
+if (empty($email))      $errors[] = "Email is required.";
+if (empty($nic))        $errors[] = "NIC is required.";
+if (empty($address))    $errors[] = "Address is required.";
+if (empty($province) || empty($district)) $errors[] = "Province and District are required.";
+
+// Email format
+if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+    $errors[] = "Invalid email format.";
+}
+
+// Mobile (Sri Lankan 10 digits starting with 0)
+if (!preg_match('/^0[1-9][0-9]{8}$/', $mobile)) {
+    $errors[] = "Invalid mobile number. Should be 10 digits starting with 0.";
+}
+
+// NIC (old 9 digits + V/X or new 12 digits)
+if (!preg_match('/^[0-9]{9}[vVxX]|[0-9]{12}$/', $nic)) {
+    $errors[] = "Invalid NIC format.";
+}
+
+// Province & district validation
+if (!array_key_exists($province, $sl_provinces)) {
+    $errors[] = "Invalid province selected.";
+} else {
+    if (!in_array($district, $sl_provinces[$province])) {
+        $errors[] = "Invalid district for the selected province.";
+    }
+}
+
+// --- User type validation (dynamic allowed list) ---
+if ($current_user_type === 'admin') {
+    $allowed_user_types = ['admin', 'Parents', 'Vehicle Owner'];
+} else {
+    $allowed_user_types = ['Parents', 'Vehicle Owner'];
+}
+
+if (!in_array($user_type, $allowed_user_types)) {
+    $errors[] = "Invalid user type selected.";
+}
+
+// Prevent non-admin from becoming admin
+if ($user_type === 'admin' && $current_user_type !== 'admin') {
+    $errors[] = "You cannot change your user type to Admin. This option is not available.";
+}
+
+if (!empty($errors)) {
+    $_SESSION['error'] = $errors;
+    header("Location: ../edit_user_user_side_frontend.php");
+    exit();
+}
+
+// --- Duplicate checks (excluding current user) ---
+// Username
+$stmt = $conn->prepare("SELECT user_id FROM users WHERE username = ? AND user_id != ?");
+$stmt->bind_param("si", $username, $user_id);
+$stmt->execute();
+$stmt->store_result();
+if ($stmt->num_rows > 0) {
+    $errors[] = "Username already taken by another user.";
+}
+$stmt->close();
+
+// Email
+$stmt = $conn->prepare("SELECT user_id FROM users WHERE email = ? AND user_id != ?");
+$stmt->bind_param("si", $email, $user_id);
+$stmt->execute();
+$stmt->store_result();
+if ($stmt->num_rows > 0) {
+    $errors[] = "Email already registered to another user.";
+}
+$stmt->close();
+
+// NIC
+$stmt = $conn->prepare("SELECT user_id FROM users WHERE nic = ? AND user_id != ?");
+$stmt->bind_param("si", $nic, $user_id);
+$stmt->execute();
+$stmt->store_result();
+if ($stmt->num_rows > 0) {
+    $errors[] = "NIC already used by another user.";
+}
+$stmt->close();
+
+// Mobile
+$stmt = $conn->prepare("SELECT user_id FROM users WHERE mobile = ? AND user_id != ?");
+$stmt->bind_param("si", $mobile, $user_id);
+$stmt->execute();
+$stmt->store_result();
+if ($stmt->num_rows > 0) {
+    $errors[] = "Mobile number already used by another user.";
+}
+$stmt->close();
+
+if (!empty($errors)) {
+    $_SESSION['error'] = $errors;
+    header("Location: ../edit_user_user_side_frontend.php");
+    exit();
+}
+
+// --- Update user (password excluded) ---
+$update_stmt = $conn->prepare("UPDATE users SET 
+    username = ?, 
+    fullname = ?, 
+    mobile = ?, 
+    email = ?, 
+    nic = ?, 
+    province = ?, 
+    district = ?, 
+    address = ?, 
+    user_type = ? 
+    WHERE user_id = ?");
+
+$update_stmt->bind_param("sssssssssi", 
+    $username, $fullname, $mobile, $email, $nic, 
+    $province, $district, $address, $user_type, 
+    $user_id
+);
+
+if ($update_stmt->execute()) {
+    $_SESSION['success'] = "Profile updated successfully!";
+} else {
+    $_SESSION['error'] = "Database update failed. Please try again.";
+}
+
+$update_stmt->close();
+$conn->close();
+
+header("Location: ../edit_user_user_side_frontend.php");
+exit();
+?>
+
+3. Includes\edit_user_password_by_admin.php
+
+<?php
+session_start();
+include "db_connection.php";
+include "Cookie_Managements/cookie_management.php";
+
+$message = '';
+$is_success = true; // track success/failure
+
+if (isset($_GET['id']) && is_numeric($_GET['id'])) {
+    $user_id = $_GET['id'];
+    
+    // Reset password to Temppass123 (hashed)
+    $temp_password = "Temppass123";
+    $hashed_password = password_hash($temp_password, PASSWORD_BCRYPT);
+    
+    // First get username for the message
+    $user_sql = "SELECT username FROM users WHERE user_id = ?";
+    $user_stmt = $conn->prepare($user_sql);
+    $user_stmt->bind_param("i", $user_id);
+    $user_stmt->execute();
+    $user_result = $user_stmt->get_result();
+    $username = '';
+    if ($user_row = $user_result->fetch_assoc()) {
+        $username = $user_row['username'];
+    }
+    $user_stmt->close();
+    
+    $sql = "UPDATE users SET password = ? WHERE user_id = ?";
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param("si", $hashed_password, $user_id);
+    
+    if ($stmt->execute()) {
+        if (!empty($username)) {
+            $message = "Password for user '$username' has been reset to Temppass123.";
+        } else {
+            $message = "Password for user ID $user_id has been reset to Temppass123.";
+        }
+    } else {
+        $message = "Error resetting password: " . $conn->error;
+        $is_success = false;
+    }
+    $stmt->close();
+} else {
+    $message = "Invalid user ID.";
+    $is_success = false;
+}
+
+// Use session keys that match user_management.php's Session_Messages_Helper
+if ($is_success) {
+    $_SESSION['edit_user_success'] = $message;
+} else {
+    $_SESSION['edit_user_error'] = $message;
+}
+
+// Redirect back to user management page with same filters and page
+$redirect = "../user_management.php?page=" . urlencode($_GET['page'] ?? 1) .
+            "&search=" . urlencode($_GET['search'] ?? '') .
+            "&user_type=" . urlencode($_GET['user_type'] ?? '');
+header("Location: $redirect");
+exit;
+?>
+
+4. Includes\create_users_admin_side_backend.php
+
+<?php
+// Start session if not already started
+if (session_status() == PHP_SESSION_NONE) {
+    session_start();
+}
+
+// Include database connection
+include "db_connection.php";
+
+// Process form submission
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Required fields
+    $required = ['username', 'fullname', 'mobile', 'email', 'nic', 'district', 'province', 'address', 'user_type'];
+    $missing = [];
+    foreach ($required as $field) {
+        if (empty($_POST[$field])) {
+            $missing[] = $field;
+        }
+    }
+
+    if (!empty($missing)) {
+        $_SESSION['create_user_error'] = "Please fill all required fields: " . implode(', ', $missing);
+        header("Location: create_users_admin_side_frontend.php");
+        exit();
+    }
+
+    // Sanitize input
+    $username  = trim($_POST['username']);
+    $fullname  = trim($_POST['fullname']);
+    $mobile    = trim($_POST['mobile']);
+    $email     = trim($_POST['email']);
+    $nic       = trim($_POST['nic']);
+    $district  = trim($_POST['district']);
+    $province  = trim($_POST['province']);
+    $address   = trim($_POST['address']);
+    $user_type = trim($_POST['user_type']);
+
+    // Check for duplicate entries (username, email, nic, mobile)
+    $duplicate_error = '';
+
+    // Check username
+    $stmt = $conn->prepare("SELECT user_id FROM users WHERE username = ?");
+    $stmt->bind_param("s", $username);
+    $stmt->execute();
+    $stmt->store_result();
+    if ($stmt->num_rows > 0) {
+        $duplicate_error .= "Username already exists. ";
+    }
+    $stmt->close();
+
+    // Check email
+    $stmt = $conn->prepare("SELECT user_id FROM users WHERE email = ?");
+    $stmt->bind_param("s", $email);
+    $stmt->execute();
+    $stmt->store_result();
+    if ($stmt->num_rows > 0) {
+        $duplicate_error .= "Email already exists. ";
+    }
+    $stmt->close();
+
+    // Check NIC
+    $stmt = $conn->prepare("SELECT user_id FROM users WHERE nic = ?");
+    $stmt->bind_param("s", $nic);
+    $stmt->execute();
+    $stmt->store_result();
+    if ($stmt->num_rows > 0) {
+        $duplicate_error .= "NIC already exists. ";
+    }
+    $stmt->close();
+
+    // Check mobile
+    $stmt = $conn->prepare("SELECT user_id FROM users WHERE mobile = ?");
+    $stmt->bind_param("s", $mobile);
+    $stmt->execute();
+    $stmt->store_result();
+    if ($stmt->num_rows > 0) {
+        $duplicate_error .= "Mobile already exists. ";
+    }
+    $stmt->close();
+
+    // If any duplicate found, redirect with error
+    if (!empty($duplicate_error)) {
+        $_SESSION['create_user_error'] = trim($duplicate_error);
+        header("Location: create_users_admin_side_frontend.php");
+        exit();
+    }
+
+    // Hash the fixed temporary password
+    $password_hashed = password_hash("Temppass123", PASSWORD_BCRYPT);
+
+    // Insert into users table
+    $insert_user = $conn->prepare("INSERT INTO users (username, fullname, mobile, email, nic, district, province, address, user_type, password) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    $insert_user->bind_param("ssssssssss", $username, $fullname, $mobile, $email, $nic, $district, $province, $address, $user_type, $password_hashed);
+
+    if ($insert_user->execute()) {
+        $new_user_id = $conn->insert_id;
+
+        // Insert into user_created_method with method = 'Custom'
+        $insert_method = $conn->prepare("INSERT INTO user_created_method (user_id, method) VALUES (?, 'Custom')");
+        $insert_method->bind_param("i", $new_user_id);
+        $insert_method->execute();
+        $insert_method->close();
+
+        $_SESSION['create_user_success'] = "User created successfully! Temporary password is: Temppass123";
+    } else {
+        $_SESSION['create_user_error'] = "Database error: " . $insert_user->error;
+    }
+
+    $insert_user->close();
+
+    // Redirect to avoid form resubmission
+    header("Location: create_users_admin_side_frontend.php");
+    exit();
+}
+?>
+
+5. Includes\edit_user_by_admin.php
+
+<?php
+session_start();
+include "db_connection.php";   // adjust path if needed
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Retrieve form data
+    $user_id = (int)$_POST['user_id'];
+    $username = trim($_POST['username']);
+    $fullname = trim($_POST['fullname']);
+    $mobile = trim($_POST['mobile']);
+    $email = trim($_POST['email']);
+    $nic = trim($_POST['nic']);
+    $district = trim($_POST['district']);
+    $province = trim($_POST['province']);
+    $address = trim($_POST['address']);
+    $user_type = trim($_POST['user_type']);
+
+    // Filter parameters to preserve after redirect
+    $page = isset($_POST['page']) ? (int)$_POST['page'] : 1;
+    $search = isset($_POST['search']) ? $_POST['search'] : '';
+    $user_type_filter = isset($_POST['user_type_filter']) ? $_POST['user_type_filter'] : '';
+    $creation_method_filter = isset($_POST['creation_method']) ? $_POST['creation_method'] : '';
+
+    $errors = [];
+
+    // 1. Required field check
+    $required = [
+        'username' => $username,
+        'fullname' => $fullname,
+        'mobile'   => $mobile,
+        'email'    => $email,
+        'nic'      => $nic,
+        'district' => $district,
+        'province' => $province,
+        'address'  => $address,
+        'user_type'=> $user_type
+    ];
+    foreach ($required as $field => $value) {
+        if (empty($value) && $value !== '0') {
+            $errors[] = ucfirst($field) . " is required.";
+        }
+    }
+
+    // 2. Email format
+    if (!empty($email) && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $errors[] = "Invalid email format.";
+    }
+
+    // 3. Duplicate checks (exclude current user)
+    if (empty($errors)) {
+        // Check username
+        $stmt = $conn->prepare("SELECT user_id FROM users WHERE username = ? AND user_id != ?");
+        $stmt->bind_param("si", $username, $user_id);
+        $stmt->execute();
+        $stmt->store_result();
+        if ($stmt->num_rows > 0) {
+            $errors[] = "Username already taken.";
+        }
+        $stmt->close();
+
+        // Check email
+        $stmt = $conn->prepare("SELECT user_id FROM users WHERE email = ? AND user_id != ?");
+        $stmt->bind_param("si", $email, $user_id);
+        $stmt->execute();
+        $stmt->store_result();
+        if ($stmt->num_rows > 0) {
+            $errors[] = "Email already in use.";
+        }
+        $stmt->close();
+
+        // Check NIC
+        $stmt = $conn->prepare("SELECT user_id FROM users WHERE nic = ? AND user_id != ?");
+        $stmt->bind_param("si", $nic, $user_id);
+        $stmt->execute();
+        $stmt->store_result();
+        if ($stmt->num_rows > 0) {
+            $errors[] = "NIC already registered.";
+        }
+        $stmt->close();
+
+        // Check mobile
+        $stmt = $conn->prepare("SELECT user_id FROM users WHERE mobile = ? AND user_id != ?");
+        $stmt->bind_param("si", $mobile, $user_id);
+        $stmt->execute();
+        $stmt->store_result();
+        if ($stmt->num_rows > 0) {
+            $errors[] = "Mobile number already in use.";
+        }
+        $stmt->close();
+    }
+
+    // If errors, store in session and redirect back to modal
+    if (!empty($errors)) {
+        $_SESSION['edit_errors'] = $errors;
+        $_SESSION['edit_old_input'] = [
+            'username'   => $username,
+            'fullname'   => $fullname,
+            'mobile'     => $mobile,
+            'email'      => $email,
+            'nic'        => $nic,
+            'district'   => $district,
+            'province'   => $province,
+            'address'    => $address,
+            'user_type'  => $user_type
+        ];
+
+        // Build redirect URL (edit modal open again)
+        $redirect = "../user_management.php?edit_modal=1&edit_user_id=$user_id";
+        if ($page > 1) $redirect .= "&page=$page";
+        if (!empty($search)) $redirect .= "&search=" . urlencode($search);
+        if (!empty($user_type_filter)) $redirect .= "&user_type=" . urlencode($user_type_filter);
+        if (!empty($creation_method_filter)) $redirect .= "&creation_method=" . urlencode($creation_method_filter);
+
+        header("Location: $redirect");
+        exit();
+    }
+
+    // 4. Update user data
+    $stmt = $conn->prepare("UPDATE users SET username=?, fullname=?, mobile=?, email=?, nic=?, district=?, province=?, address=?, user_type=? WHERE user_id=?");
+    $stmt->bind_param("sssssssssi", $username, $fullname, $mobile, $email, $nic, $district, $province, $address, $user_type, $user_id);
+
+    if ($stmt->execute()) {
+        // Success message (ඔබේ session message රටාවට)
+        $_SESSION['edit_user_success'] = "User updated successfully.";
+    } else {
+        $_SESSION['edit_user_error'] = "Database error: " . $stmt->error;
+    }
+    $stmt->close();
+    $conn->close();
+
+    // Build clean redirect URL (no modal parameters)
+    $redirect = "../user_management.php";
+    $queryParams = [];
+    if ($page > 1) $queryParams['page'] = $page;
+    if (!empty($search)) $queryParams['search'] = $search;
+    if (!empty($user_type_filter)) $queryParams['user_type'] = $user_type_filter;
+    if (!empty($creation_method_filter)) $queryParams['creation_method'] = $creation_method_filter;
+
+    if (!empty($queryParams)) {
+        $redirect .= '?' . http_build_query($queryParams);
+    }
+
+    header("Location: $redirect");
+    exit();
+}
+?>
+
+6. edit_user_password.php
+
+<?php
+session_start(); // Session management for verification code
+
+// Autoload (vendor/autoload.php ඇතුළත්)
+require 'vendor/autoload.php'; // PHPMailer + Dotenv autoload
+
+// .env ගොනුව edit_user_password.php ඇති ෆෝල්ඩරයේම ඇති නිසා සෘජුව පැටවීම
+$dotenv = Dotenv\Dotenv::createImmutable(__DIR__);
+$dotenv->load();
+
+include "includes/db_connection.php";
+
+$Page_Name = "Change Password";
+
+// Cookie handling
+$cookie_data = [];
+if (isset($_COOKIE['abc'])) {
+    $cookie_data = json_decode($_COOKIE['abc'], true);
+}
+$isLogged = isset($cookie_data['islogged']) && $cookie_data['islogged'] == 1;
+$user_id = isset($cookie_data['user_id']) ? intval($cookie_data['user_id']) : 0;
+
+// Login check
+if (!$isLogged || $user_id === 0) {
+    header("Location: login.php");
+    exit();
+}
+
+// Get user details
+$user_email = '';
+$username   = '';
+$stmt = $conn->prepare("SELECT username, email FROM users WHERE user_id = ?");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$stmt->bind_result($username, $user_email);
+$stmt->fetch();
+$stmt->close();
+
+if (empty($user_email)) {
+    die("User email not found.");
+}
+
+// ==================== HELPER FUNCTIONS ====================
+// Mask email for display
+function maskEmail($email) {
+    $parts = explode("@", $email);
+    if (count($parts) == 2) {
+        $name = $parts[0];
+        $domain = $parts[1];
+        $len = strlen($name);
+        if ($len <= 3) {
+            $masked_name = substr($name, 0, 1) . str_repeat('*', $len-1);
+        } else {
+            $masked_name = substr($name, 0, 3) . str_repeat('*', $len-3);
+        }
+        $domain_parts = explode(".", $domain);
+        if (count($domain_parts) >= 2) {
+            $domain_name = $domain_parts[0];
+            $domain_tld  = $domain_parts[count($domain_parts)-1];
+            $domain_mid  = implode(".", array_slice($domain_parts, 1, -1));
+            $masked_domain = substr($domain_name, 0, min(3, strlen($domain_name))) .
+                             str_repeat('*', max(0, strlen($domain_name)-3));
+            if ($domain_mid) {
+                $masked_domain .= "." . $domain_mid;
+            }
+            $masked_domain .= "." . $domain_tld;
+        } else {
+            $masked_domain = $domain;
+        }
+        return $masked_name . "@" . $masked_domain;
+    }
+    return $email;
+}
+
+// Generate random numeric code
+function generateCode($length = 6) {
+    return str_pad(random_int(0, pow(10, $length)-1), $length, '0', STR_PAD_LEFT);
+}
+
+// Alert session handlers
+function setAlert($type, $message) {
+    $_SESSION['alert'] = ['type' => $type, 'message' => $message];
+}
+function getAlert() {
+    if (isset($_SESSION['alert'])) {
+        $alert = $_SESSION['alert'];
+        unset($_SESSION['alert']);
+        return $alert;
+    }
+    return null;
+}
+
+// Send verification code via SMTP (PHPMailer)
+function sendVerificationEmail($email, $username, $code) {
+    $mail = new PHPMailer\PHPMailer\PHPMailer(true);
+    try {
+        $mail->isSMTP();
+        $mail->Host       = $_ENV['SMTP_HOST'];
+        $mail->SMTPAuth   = true;
+        $mail->Username   = $_ENV['SMTP_USER'];
+        $mail->Password   = $_ENV['SMTP_PASS'];
+        $mail->SMTPSecure = $_ENV['SMTP_SECURE'] ?? 'tls';
+        $mail->Port       = $_ENV['SMTP_PORT'] ?? 587;
+
+        $mail->setFrom($_ENV['SMTP_USER'], 'Sisu Seriya');
+        $mail->addAddress($email, $username);
+        $mail->isHTML(true);
+        $mail->Subject = "Password Change Verification Code";
+        $mail->Body    = "<p>Hello <b>" . htmlspecialchars($username) . "</b>,</p>
+                          <p>Your verification code is: <b>$code</b></p>
+                          <p>This code expires in 5 minutes.</p>";
+
+        $mail->send();
+        return true;
+    } catch (Exception $e) {
+        return false;
+    }
+}
+
+// ==================== POST HANDLING & REDIRECT ====================
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $step = isset($_POST['step']) ? $_POST['step'] : 'send_code';
+
+    if ($step === 'send_code') {
+        $code = generateCode();
+        $_SESSION['pwd_reset_code'] = $code;
+        $_SESSION['pwd_reset_code_time'] = time();
+        $_SESSION['pwd_reset_email'] = $user_email;
+
+        if (sendVerificationEmail($user_email, $username, $code)) {
+            setAlert('success', 'Verification code sent to: ' . maskEmail($user_email));
+            $_SESSION['next_step'] = 'verify_code';
+        } else {
+            setAlert('danger', 'Failed to send email. Please try again later.');
+            unset($_SESSION['pwd_reset_code'], $_SESSION['pwd_reset_code_time'], $_SESSION['pwd_reset_email']);
+            $_SESSION['next_step'] = 'send_code';
+        }
+        header("Location: edit_user_password.php");
+        exit();
+    }
+    elseif ($step === 'verify_code') {
+        $entered_code = isset($_POST['verification_code']) ? trim($_POST['verification_code']) : '';
+        $stored_code = isset($_SESSION['pwd_reset_code']) ? $_SESSION['pwd_reset_code'] : '';
+        $code_time   = isset($_SESSION['pwd_reset_code_time']) ? $_SESSION['pwd_reset_code_time'] : 0;
+
+        if (empty($stored_code) || (time() - $code_time) > 300) {
+            setAlert('warning', 'Verification code expired. Please request a new code.');
+            unset($_SESSION['pwd_reset_code'], $_SESSION['pwd_reset_code_time'], $_SESSION['pwd_reset_email']);
+            $_SESSION['next_step'] = 'send_code';
+        } elseif ($entered_code === $stored_code) {
+            $_SESSION['code_verified'] = true;
+            setAlert('success', 'Code verified. Please enter your new password.');
+            $_SESSION['next_step'] = 'change_password';
+        } else {
+            setAlert('danger', 'Invalid verification code. Please try again.');
+            $_SESSION['next_step'] = 'verify_code';
+        }
+        header("Location: edit_user_password.php");
+        exit();
+    }
+    elseif ($step === 'change_password') {
+        if (!isset($_SESSION['code_verified']) || $_SESSION['code_verified'] !== true) {
+            setAlert('danger', 'Unauthorized access. Please start the process again.');
+            $_SESSION['next_step'] = 'send_code';
+        } else {
+            $new_password     = isset($_POST['new_password']) ? $_POST['new_password'] : '';
+            $confirm_password = isset($_POST['confirm_password']) ? $_POST['confirm_password'] : '';
+
+            if (empty($new_password) || empty($confirm_password)) {
+                setAlert('warning', 'Both password fields are required.');
+                $_SESSION['next_step'] = 'change_password';
+            } elseif (strlen($new_password) < 6) {
+                setAlert('warning', 'Password must be at least 6 characters.');
+                $_SESSION['next_step'] = 'change_password';
+            } elseif ($new_password !== $confirm_password) {
+                setAlert('warning', 'Passwords do not match.');
+                $_SESSION['next_step'] = 'change_password';
+            } else {
+                $hashed = password_hash($new_password, PASSWORD_BCRYPT);
+                $stmt = $conn->prepare("UPDATE users SET password = ? WHERE user_id = ?");
+                $stmt->bind_param("si", $hashed, $user_id);
+                if ($stmt->execute()) {
+                    setAlert('success', 'Password changed successfully!');
+                    unset($_SESSION['pwd_reset_code'], $_SESSION['pwd_reset_code_time'],
+                          $_SESSION['pwd_reset_email'], $_SESSION['code_verified']);
+                    $_SESSION['next_step'] = 'send_code';
+                } else {
+                    setAlert('danger', 'Database error. Could not update password.');
+                    $_SESSION['next_step'] = 'change_password';
+                }
+                $stmt->close();
+            }
+        }
+        header("Location: edit_user_password.php");
+        exit();
+    }
+}
+
+// ==================== GET REQUEST: DETERMINE STEP ====================
+$step = 'send_code';
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    if (isset($_SESSION['next_step'])) {
+        $step = $_SESSION['next_step'];
+        unset($_SESSION['next_step']);
+    }
+}
+
+if ($step === 'change_password' && (!isset($_SESSION['code_verified']) || $_SESSION['code_verified'] !== true)) {
+    $step = 'send_code';
+}
+
+?>
+
+7. log_out.php
+
+<?php
+// Start session if not already started
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+// Destroy session completely
+session_unset();
+session_destroy();
+
+// Destroy 'abc' cookie
+if (isset($_COOKIE['abc'])) {
+    // Set the cookie expiration to past date
+    setcookie('abc', '', time() - 3600, '/');
+}
+
+// Redirect user to login page or homepage
+header("Location: index.php"); // ඔබ කැමති page එකට redirect කරන්න
+exit;
+?>
+
+මෙතෙන්දි user_created_method වලදි method වලට මං "Custom", "Admin" කියලා values වැටෙන්න හදලා තියෙන්නේ. 
+
+දැනට audit වලට mysql table එකක් හදලා එකට data වැටෙන විදිහට හදන්නකෝ ඉස්සරහට කරන්න ඕනි ටික මං කියන්නම්.
