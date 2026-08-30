@@ -809,7 +809,7 @@ Before using the system, check these items.
 
 ## License
 
-This project is created for learning and project development purposes.
+This project is created for learning and project development purposes. (For Final Individual Project)
 
 ## Author
 
